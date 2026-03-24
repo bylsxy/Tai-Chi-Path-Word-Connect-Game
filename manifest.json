@@ -1,0 +1,21 @@
+{
+  "name": "太极路径连词",
+  "short_name": "太极连词",
+  "description": "太极文化路径连词游戏",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#FAF2E3",
+  "theme_color": "#E2A76F",
+  "icons": [
+    {
+      "src": "icon.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "icon.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}

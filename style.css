@@ -1,0 +1,320 @@
+:root {
+    --bg-color: #FAF2E3; /* Warm beige background */
+    --text-color: #5C4A3D; /* Dark brown text */
+    --primary-color: #E2A76F;
+    --accent-color: #ED7D60;
+    --board-bg: #EAE0D1;
+    
+    --cell-bg: #FFFFFF;
+    --cell-border: #DBCDB7;
+    --cell-bottom-border: #C8B8A1;
+    --cell-shadow: rgba(0,0,0,0.1);
+    
+    --cell-current: #9FD7E9; /* Light blue */
+    --cell-current-dark: #7DB9CD;
+    
+    --cell-done: #B1D7A4; /* Pale green */
+    --cell-done-dark: #92BD84;
+
+    --cell-error: #F29E9E; /* Light red */
+    --cell-error-dark: #D47A7A;
+}
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background-color: var(--bg-color);
+    color: var(--text-color);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    touch-action: manipulation;
+}
+
+#game-app {
+    width: 100%;
+    max-width: 500px;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    position: relative;
+    padding: 20px;
+}
+
+/* Header */
+.header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+}
+
+.icon-btn {
+    background: transparent;
+    border: none;
+    color: var(--primary-color);
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    font-size: 12px;
+    font-weight: bold;
+}
+
+.level-info {
+    text-align: center;
+}
+
+.level-info h1 {
+    font-size: 20px;
+    margin-bottom: 5px;
+    color: #8C5B32;
+}
+
+.empty-space {
+    width: 40px; /* To balance header with settings icon */
+}
+
+/* Status Bar */
+.status-bar {
+    text-align: center;
+    margin-bottom: 30px;
+}
+
+.status-bar h2 {
+    font-size: 18px;
+    font-weight: bold;
+}
+
+.status-bar span {
+    color: #3b82f6; /* Blue for timer */
+}
+
+/* Game Area */
+.game-container {
+    flex: 1;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    background-color: transparent;
+}
+
+.board {
+    display: grid;
+    gap: 4px;
+    width: 100%;
+    aspect-ratio: 1 / 1;
+    background-color: var(--board-bg);
+    padding: 8px;
+    border-radius: 12px;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.05);
+}
+
+.cell {
+    background-color: var(--cell-bg);
+    border: 2px solid var(--cell-border);
+    border-bottom: 4px solid var(--cell-bottom-border);
+    border-radius: 8px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    font-size: clamp(16px, 5vw, 24px);
+    font-weight: bold;
+    cursor: pointer;
+    transition: all 0.1s;
+    color: #444;
+}
+
+.cell:active {
+    transform: translateY(2px);
+    border-bottom-width: 2px;
+    margin-bottom: 2px;
+}
+
+.cell.selected {
+    background-color: var(--cell-current);
+    border-color: var(--cell-current-dark);
+    border-bottom-color: var(--cell-current-dark);
+    color: #114B5F;
+}
+
+.cell.done {
+    background-color: var(--cell-done);
+    border-color: var(--cell-done-dark);
+    border-bottom-color: var(--cell-done-dark);
+    color: #2F5927;
+}
+
+.cell.error {
+    background-color: var(--cell-error);
+    border-color: var(--cell-error-dark);
+    border-bottom-color: var(--cell-error-dark);
+    color: #7A2626;
+    animation: shake 0.3s ease-in-out;
+}
+
+@keyframes shake {
+    0%, 100% { transform: translateX(0); }
+    25% { transform: translateX(-4px); }
+    75% { transform: translateX(4px); }
+}
+
+/* Bottom Actions */
+.bottom-bar {
+    display: flex;
+    justify-content: space-around;
+    padding: 20px 0;
+}
+
+.action-btn {
+    background: transparent;
+    border: none;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    cursor: pointer;
+    color: #8C5B32;
+    font-weight: bold;
+    font-size: 14px;
+}
+
+.btn-icon {
+    background-color: #FFDE82;
+    width: 60px;
+    height: 60px;
+    border-radius: 50%;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    margin-bottom: 8px;
+    border: 3px solid #E5C263;
+    box-shadow: 0 4px 0 #D6B151;
+    transition: all 0.1s;
+}
+
+.action-btn:active .btn-icon {
+    transform: translateY(4px);
+    box-shadow: 0 0px 0 #D6B151;
+}
+
+/* Modals */
+.modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0,0,0,0.5);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 1000;
+}
+
+.modal.hidden {
+    display: none;
+}
+
+.modal-content {
+    background: #FFF8EE;
+    width: 90%;
+    max-width: 400px;
+    border-radius: 16px;
+    padding: 24px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+}
+
+.modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+}
+
+.close-btn {
+    background: transparent;
+    border: none;
+    font-size: 24px;
+    cursor: pointer;
+    color: #888;
+}
+
+.form-group {
+    margin-bottom: 16px;
+}
+
+.form-group label {
+    display: block;
+    margin-bottom: 8px;
+    font-weight: bold;
+}
+
+.form-group select, .form-group textarea {
+    width: 100%;
+    padding: 10px;
+    border: 2px solid #DBCDB7;
+    border-radius: 8px;
+    font-family: inherit;
+    font-size: 16px;
+    background: #FFF;
+}
+
+.form-group textarea {
+    resize: vertical;
+}
+
+.modal-footer {
+    display: flex;
+    justify-content: center;
+    margin-top: 24px;
+}
+
+.primary-btn {
+    background-color: var(--accent-color);
+    color: white;
+    border: none;
+    padding: 12px 24px;
+    font-size: 16px;
+    font-weight: bold;
+    border-radius: 24px;
+    cursor: pointer;
+    box-shadow: 0 4px 0 #C9664D;
+    transition: all 0.1s;
+}
+
+.primary-btn:active {
+    transform: translateY(4px);
+    box-shadow: 0 0 0 #C9664D;
+}
+
+.secondary-btn {
+    background-color: transparent;
+    color: #8C5B32;
+    border: 2px solid #DBCDB7;
+    padding: 10px 20px;
+    font-size: 14px;
+    font-weight: bold;
+    border-radius: 24px;
+    cursor: pointer;
+    transition: all 0.1s;
+}
+
+.secondary-btn:active {
+    background-color: #EAE0D1;
+}
+
+.text-center {
+    text-align: center;
+}
+
+.mt-4 {
+    margin-top: 16px;
+}
