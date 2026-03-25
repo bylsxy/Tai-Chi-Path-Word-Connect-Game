@@ -180,29 +180,32 @@ function startGame() {
 }
 
 function selectWordsToFill(pool, targetSum) {
-    // Basic greedy/random approach to find words lengths summing exactly to targetSum
-    // If we fail after many tries, we pad it with single characters or dummy words.
     let selected = [];
     let currentSum = 0;
-
     let attempts = 0;
+
+    // Continuously pull words from the pool until the targetSum is reached.
+    // Pool allows repeating words.
     while (currentSum !== targetSum && attempts < 1000) {
         selected = [];
         currentSum = 0;
-        let shuffledPool = [...pool].sort(() => 0.5 - Math.random());
 
-        for (let i = 0; i < shuffledPool.length; i++) {
-            let w = shuffledPool[i];
-            if (currentSum + w.length <= targetSum) {
-                selected.push(w);
-                currentSum += w.length;
-            }
+        let localAttempts = 0;
+        while (currentSum < targetSum && localAttempts < 1000) {
+            // Find words in pool that still fit
+            let validWords = pool.filter(w => currentSum + w.length <= targetSum);
+            if (validWords.length === 0) break; // no words can fit anymore (gap too small)
+
+            let w = validWords[Math.floor(Math.random() * validWords.length)];
+            selected.push(w);
+            currentSum += w.length;
+            localAttempts++;
             if (currentSum === targetSum) break;
         }
         attempts++;
     }
 
-    // If exact sum not reachable nicely, pad it arbitrarily
+    // If exact sum not reachable (e.g. gap of 1 but no length-1 words in pool), pad remainder with 1-char arbitrary words
     if (currentSum < targetSum) {
         const paddingChars = "太极八卦两仪四象阴阳虚实刚柔动静";
         while (currentSum < targetSum) {
@@ -264,6 +267,7 @@ function generateGridLayout() {
         grid[r][c] = {
             char: word[charIdx],
             originWord: word,
+            wordId: wordIdx,
             done: false,
             r: r,
             c: c,
@@ -299,14 +303,16 @@ function fillWithRandomGrid() {
     // shuffle chars? No, they need to be grouped as words to be playable.
     // However, if we dump them linearly they are trivial.
     // This is just a simple fallback to prevent crashes.
+    let wordIdx = 0;
     for (let w of targetWords) {
         for (let char of w) {
             if (flatIdx >= boardSize * boardSize) return;
             let r = Math.floor(flatIdx / boardSize);
             let c = flatIdx % boardSize;
-            grid[r][c] = { char: char, originWord: w, done: false, r: r, c: c, id: r * boardSize + c };
+            grid[r][c] = { char: char, originWord: w, wordId: wordIdx, done: false, r: r, c: c, id: r * boardSize + c };
             flatIdx++;
         }
+        wordIdx++;
     }
 }
 
@@ -342,6 +348,12 @@ function handleCellClick(r, c) {
 
     // 1. If no word is currently being formed
     if (currentPath.length === 0) {
+        // Enforce that a path must begin with the first character of the assigned word instance
+        if (cellData.char !== cellData.originWord[0]) {
+            cellEl.classList.add('error');
+            setTimeout(() => cellEl.classList.remove('error'), 300);
+            return;
+        }
         startNewPath(r, c, cellData, cellEl);
         return;
     }
@@ -368,12 +380,11 @@ function handleCellClick(r, c) {
 
     // 4. Validate next character of the word
     const targetWordStr = currentPath[0].data.originWord; // We lock into the word of the first clicked cell
+    const targetWordId = currentPath[0].data.wordId;      // We lock into the specific instance initially generated
     const expectedChar = targetWordStr[currentPath.length];
 
-    if (cellData.char === expectedChar && cellData.originWord === targetWordStr) {
-        // Success match logically (we also ensure it's from the SAME instance of the word if multiple same words exist!)
-        // However, if the grid generation allows duplicates, we could have loose checking.
-        // Let's strict check originWord instance by ensuring cellData.originWord matches.
+    if (cellData.char === expectedChar && cellData.wordId === targetWordId) {
+        // Success match logically
 
         currentPath.push({ r, c, data: cellData, el: cellEl });
         cellEl.classList.add('selected');
