@@ -227,8 +227,15 @@ function generateGridLayout() {
     // Metadata for each word: the cells it takes
     const wordPaths = [];
 
+    // Limit maximum operations to prevent infinite backtracking freeze
+    let ops = 0;
+    const MAX_OPS = 2000;
+
     // Recursive DFS for exact grid fill (Hamiltonian-ish path approach per word)
     function placeWord(wordIdx) {
+        if (ops > MAX_OPS) return false;
+        ops++;
+
         if (wordIdx === sortedWords.length) {
             return true; // All words placed!
         }
@@ -241,7 +248,7 @@ function generateGridLayout() {
                 if (grid[r][c] === null) {
                     // Try to place word starting at (r, c)
                     const path = [];
-                    if (dfsWordPlace(word, 0, r, c, path)) {
+                    if (dfsWordPlace(word, wordIdx, 0, r, c, path)) {
                         wordPaths.push({ word: word, path: [...path] });
                         if (placeWord(wordIdx + 1)) return true;
 
@@ -256,7 +263,10 @@ function generateGridLayout() {
         return false;
     }
 
-    function dfsWordPlace(word, charIdx, r, c, currentWordPath) {
+    function dfsWordPlace(word, wordIdx, charIdx, r, c, currentWordPath) {
+        if (ops > MAX_OPS) return false;
+        ops++;
+
         if (charIdx === word.length) return true;
 
         // Bounds and empty check
@@ -281,7 +291,7 @@ function generateGridLayout() {
         const dirs = [[0, 1], [1, 0], [0, -1], [-1, 0]].sort(() => 0.5 - Math.random());
 
         for (let [dr, dc] of dirs) {
-            if (dfsWordPlace(word, charIdx + 1, r + dr, c + dc, currentWordPath)) {
+            if (dfsWordPlace(word, wordIdx, charIdx + 1, r + dr, c + dc, currentWordPath)) {
                 return true;
             }
         }
