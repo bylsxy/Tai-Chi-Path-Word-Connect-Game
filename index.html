@@ -60,6 +60,25 @@
         </footer>
     </div>
 
+    <!-- Loading Overlay -->
+    <div id="loading-overlay" class="loading-overlay hidden">
+        <div class="loading-spinner">
+            <div class="spinner-ring"></div>
+            <p>正在生成棋盘…</p>
+        </div>
+    </div>
+
+    <!-- Toast Notification -->
+    <div id="toast-container" class="toast-container"></div>
+
+    <!-- Custom Alert Modal (replaces native alert) -->
+    <div id="alert-modal" class="modal hidden">
+        <div class="modal-content text-center">
+            <p id="alert-modal-msg" style="font-size: 16px; margin-bottom: 16px;"></p>
+            <button id="btn-alert-ok" class="primary-btn">确定</button>
+        </div>
+    </div>
+
     <!-- Settings Modal -->
     <div id="settings-modal" class="modal hidden">
         <div class="modal-content">

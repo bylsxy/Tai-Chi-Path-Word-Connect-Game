@@ -318,3 +318,102 @@ body {
 .mt-4 {
     margin-top: 16px;
 }
+
+/* ============================================================
+   Loading Overlay — 棋盘生成时的加载指示器
+   ============================================================ */
+
+.loading-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(250, 242, 227, 0.92);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 2000;
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+}
+
+.loading-overlay.hidden {
+    display: none;
+}
+
+.loading-spinner {
+    text-align: center;
+    color: var(--text-color);
+}
+
+.loading-spinner p {
+    margin-top: 20px;
+    font-size: 18px;
+    font-weight: bold;
+    color: #8C5B32;
+}
+
+.spinner-ring {
+    width: 56px;
+    height: 56px;
+    border: 5px solid #EAE0D1;
+    border-top: 5px solid var(--accent-color);
+    border-radius: 50%;
+    margin: 0 auto;
+    animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to   { transform: rotate(360deg); }
+}
+
+/* ============================================================
+   Toast Notification — 非阻塞通知
+   ============================================================ */
+
+.toast-container {
+    position: fixed;
+    top: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 3000;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    pointer-events: none;
+}
+
+.toast {
+    background: rgba(92, 74, 61, 0.92);
+    color: #fff;
+    padding: 12px 24px;
+    border-radius: 12px;
+    font-size: 15px;
+    font-weight: 500;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.18);
+    pointer-events: auto;
+    opacity: 0;
+    transform: translateY(-16px);
+    transition: opacity 0.3s ease, transform 0.3s ease;
+}
+
+.toast.show {
+    opacity: 1;
+    transform: translateY(0);
+}
+
+/* ============================================================
+   Disabled Button State
+   ============================================================ */
+
+.action-btn:disabled {
+    opacity: 0.4;
+    pointer-events: none;
+}
+
+.action-btn:disabled .btn-icon {
+    box-shadow: 0 2px 0 #D6B151;
+}
