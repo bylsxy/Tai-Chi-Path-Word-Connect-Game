@@ -9,10 +9,14 @@ let targetWords = [];
 let boardSize = 6;
 let grid = [];
 let currentPath = [];
-let currentWordIndex = -1;
-let currentWordProgress = 0;
+let targetPaths = [];
+let foundWordCounts = new Map();
+let usedWordPaths = new Set();
 let foundWordsCount = 0;
 let totalWordsToFind = 0;
+let gameGeneration = 0;
+let gamePhase = 'loading';
+let pendingRoundTimeout = null;
 
 let timerInterval = null;
 let timerSeconds = 0;
@@ -20,6 +24,7 @@ let timerSeconds = 0;
 // Web Worker 实例（延迟初始化）
 let gridWorker = null;
 let workerTimeout = null;
+let gridGeneratorPromise = null;
 
 const DOM = {
     board: document.getElementById('board'),
@@ -37,6 +42,9 @@ const DOM = {
     wordListInput: document.getElementById('word-list-input'),
     winModal: document.getElementById('win-modal'),
     btnNextLevel: document.getElementById('btn-next-level'),
+    loseModal: document.getElementById('lose-modal'),
+    loseRemaining: document.getElementById('lose-remaining'),
+    btnTryAgain: document.getElementById('btn-try-again'),
     // 新增 DOM 引用
     loadingOverlay: document.getElementById('loading-overlay'),
     toastContainer: document.getElementById('toast-container'),
@@ -108,8 +116,8 @@ function loadSettings() {
         DOM.wordListInput.value = defaultWords.join('\n');
     }
 
-    if (savedSize) {
-        boardSize = parseInt(savedSize, 10);
+    if (['6', '8', '10'].includes(savedSize)) {
+        boardSize = Number(savedSize);
         DOM.difficultySelect.value = boardSize;
     } else {
         boardSize = 6;
@@ -156,6 +164,8 @@ function setupEventListeners() {
         startGame();
     });
 
+    DOM.btnTryAgain.addEventListener('click', startGame);
+
     DOM.btnHint.addEventListener('click', () => {
         showHint();
     });
@@ -181,137 +191,139 @@ function stopTimer() {
         clearInterval(timerInterval);
         timerInterval = null;
     }
+    DOM.timer.classList.remove('timer-warning');
 }
 
 function startTimer() {
     stopTimer();
+    const generation = gameGeneration;
     timerSeconds = 60 * (boardSize === 6 ? 1 : boardSize === 8 ? 2 : 3);
     updateTimerUI();
 
     timerInterval = setInterval(() => {
+        if (generation !== gameGeneration || gamePhase !== 'playing') return;
+        if (document.hidden || !DOM.settingsModal.classList.contains('hidden')) return;
         timerSeconds--;
         updateTimerUI();
         if (timerSeconds <= 0) {
             stopTimer();
-            showToast("⏰ 时间到！自动重新开始");
-            setTimeout(() => startGame(), 1500);
+            gamePhase = 'expired';
+            resetCurrentPath();
+            DOM.btnHint.disabled = true;
+            DOM.loseRemaining.textContent = totalWordsToFind - foundWordsCount;
+            DOM.loseModal.classList.remove('hidden');
         }
     }, 1000);
 }
 
 function updateTimerUI() {
     DOM.timer.textContent = timerSeconds;
+    DOM.timer.classList.toggle('timer-warning', gamePhase === 'playing' && timerSeconds > 0 && timerSeconds <= 10);
 }
 
 // ============================================================
 // 游戏启动 — 使用 Web Worker 异步生成棋盘
 // ============================================================
 
+function loadGridGenerator() {
+    if (window.TaiChiGrid) return Promise.resolve(window.TaiChiGrid);
+    if (!gridGeneratorPromise) {
+        gridGeneratorPromise = new Promise((resolve, reject) => {
+            const script = document.createElement('script');
+            script.src = './grid-worker.js';
+            script.onload = () => {
+                if (window.TaiChiGrid) resolve(window.TaiChiGrid);
+                else { gridGeneratorPromise = null; reject(new Error('棋盘生成器未就绪')); }
+            };
+            script.onerror = () => {
+                gridGeneratorPromise = null;
+                reject(new Error('无法加载棋盘生成器，请检查本地文件'));
+            };
+            document.head.appendChild(script);
+        });
+    }
+    return gridGeneratorPromise;
+}
+
 function startGame() {
+    const generation = ++gameGeneration;
     stopTimer();
+    clearTimeout(pendingRoundTimeout);
+    pendingRoundTimeout = null;
+    if (gridWorker) gridWorker.terminate();
+    gridWorker = null;
+    clearTimeout(workerTimeout);
+    workerTimeout = null;
+    gamePhase = 'loading';
+    resetCurrentPath();
     DOM.winModal.classList.add('hidden');
-
-    const wordsRaw = DOM.wordListInput.value.split('\n').map(w => w.trim()).filter(w => w.length > 0);
-    const pool = wordsRaw.length > 0 ? wordsRaw : defaultWords;
-    const targetSize = boardSize * boardSize;
-
-    // 显示加载动画
+    DOM.loseModal.classList.add('hidden');
+    const wordsRaw = DOM.wordListInput.value.split('\n').map(w => w.trim()).filter(Boolean);
+    const pool = wordsRaw.length ? wordsRaw : defaultWords;
+    const size = boardSize;
     showLoading(true);
-
-    // 禁用按钮防止重复点击
     DOM.btnRestart.disabled = true;
     DOM.btnHint.disabled = true;
 
-    // 终止之前的 Worker（如果存在）
-    if (gridWorker) {
-        gridWorker.terminate();
-        gridWorker = null;
-    }
-    if (workerTimeout) {
+    let activeWorker = null;
+    let settled = false;
+    let fallbackStarted = false;
+    function finish(result) {
+        // 旧局的 Worker、超时回调或回退结果不能覆盖新局。
+        if (settled || generation !== gameGeneration) return;
+        settled = true;
         clearTimeout(workerTimeout);
         workerTimeout = null;
-    }
-
-    // 创建新的 Worker
-    gridWorker = new Worker('./grid-worker.js');
-
-    // 设置超时保护：8秒后如果 Worker 还没返回，强制终止
-    workerTimeout = setTimeout(() => {
-        if (gridWorker) {
-            gridWorker.terminate();
-            gridWorker = null;
-        }
+        if (activeWorker) activeWorker.terminate();
+        if (gridWorker === activeWorker) gridWorker = null;
         showLoading(false);
         DOM.btnRestart.disabled = false;
-        DOM.btnHint.disabled = false;
-        showToast("⚠️ 生成超时，正在重试…");
-        setTimeout(() => startGame(), 500);
-    }, 8000);
-
-    // Worker 返回结果
-    gridWorker.onmessage = (e) => {
-        clearTimeout(workerTimeout);
-        workerTimeout = null;
-        gridWorker.terminate();
-        gridWorker = null;
-
-        const { success, grid: newGrid, targetWords: newTargetWords, fallback, error } = e.data;
-
-        if (!success) {
-            showLoading(false);
-            DOM.btnRestart.disabled = false;
-            DOM.btnHint.disabled = false;
-            showAlert("棋盘生成失败：" + (error || "未知错误")).then(() => startGame());
+        if (!result.success) {
+            gamePhase = 'error';
+            DOM.btnHint.disabled = true;
+            showAlert('棋盘生成失败：' + (result.error || '未知错误'));
             return;
         }
-
-        if (fallback) {
-            showToast("词语难以排布，已使用简单布局");
-        }
-
-        // 应用生成结果
-        grid = newGrid;
-        targetWords = newTargetWords;
+        grid = result.grid;
+        targetWords = result.targetWords;
+        targetPaths = result.targetPaths || [];
+        foundWordCounts = new Map();
+        usedWordPaths = new Set();
         totalWordsToFind = targetWords.length;
         foundWordsCount = 0;
-
         DOM.remainingWords.textContent = totalWordsToFind;
-
-        // 渲染棋盘
         renderBoard();
-
-        // 初始化游戏状态
-        currentPath = [];
-        currentWordIndex = -1;
-        currentWordProgress = 0;
-
-        // 隐藏加载、恢复按钮
-        showLoading(false);
-        DOM.btnRestart.disabled = false;
+        gamePhase = 'playing';
         DOM.btnHint.disabled = false;
-
-        // 启动计时器
         startTimer();
-    };
-
-    // Worker 错误处理
-    gridWorker.onerror = (err) => {
+    }
+    function fallback() {
+        if (settled || fallbackStarted || generation !== gameGeneration) return;
+        fallbackStarted = true;
         clearTimeout(workerTimeout);
         workerTimeout = null;
-        if (gridWorker) {
-            gridWorker.terminate();
-            gridWorker = null;
-        }
-        showLoading(false);
-        DOM.btnRestart.disabled = false;
-        DOM.btnHint.disabled = false;
-        console.error('Grid Worker Error:', err);
-        showToast("⚠️ 生成出错，正在重试…");
-        setTimeout(() => startGame(), 500);
-    };
-
-    // 发送任务给 Worker
-    gridWorker.postMessage({ pool, boardSize, targetSize });
+        if (activeWorker) activeWorker.terminate();
+        if (gridWorker === activeWorker) gridWorker = null;
+        // 使用同一有界生成器回退一次，避免 Worker 不可用时无限重试。
+        loadGridGenerator().then(generator => {
+            if (generation === gameGeneration) finish(generator.generate(pool, size));
+        }).catch(error => finish({ success: false, error: error.message }));
+    }
+    try {
+        activeWorker = new Worker('./grid-worker.js');
+        gridWorker = activeWorker;
+        activeWorker.onmessage = event => {
+            if (!fallbackStarted) finish(event.data);
+        };
+        activeWorker.onerror = event => {
+            if (event.preventDefault) event.preventDefault();
+            fallback();
+        };
+        workerTimeout = setTimeout(fallback, 8000);
+        activeWorker.postMessage({ pool, boardSize: size, targetSize: size * size });
+    } catch (_) {
+        fallback();
+    }
 }
 
 // ============================================================
@@ -346,76 +358,73 @@ function renderBoard() {
 // 游戏逻辑
 // ============================================================
 
+function pathText(path = currentPath) {
+    return path.map(p => p.data.char).join('');
+}
+
+function remainingCopies(word) {
+    return targetWords.filter(target => target === word).length - (foundWordCounts.get(word) || 0);
+}
+
+function matchingWords(prefix) {
+    return [...new Set(targetWords)].filter(word => remainingCopies(word) > 0 && word.startsWith(prefix));
+}
+
+function wordPathKey(word, path) {
+    const cells = path.map(p => p.r * boardSize + p.c);
+    const forward = cells.join(',');
+    const backward = cells.slice().reverse().join(',');
+    // 同一物理路径正反都只能计一次，重复词仍需找到不同路径。
+    return JSON.stringify([word, forward < backward ? forward : backward]);
+}
+
+function markPathError(cellEl) {
+    cellEl.classList.add('error');
+    setTimeout(() => cellEl.classList.remove('error'), 300);
+}
+
 function handleCellClick(r, c) {
-    const cellData = grid[r][c];
-    if (!cellData || cellData.done) return;
-
+    if (gamePhase !== 'playing') return;
+    const cellData = grid[r] && grid[r][c];
+    if (!cellData) return;
     const cellEl = document.getElementById(`cell-${r}-${c}`);
-
-    // 1. If no word is currently being formed
-    if (currentPath.length === 0) {
-        // Enforce that a path must begin with the first character of the assigned word instance
-        if (cellData.char !== cellData.originWord[0]) {
-            cellEl.classList.add('error');
-            setTimeout(() => cellEl.classList.remove('error'), 300);
-            return;
-        }
+    if (!cellEl) return;
+    if (!currentPath.length) {
         startNewPath(r, c, cellData, cellEl);
         return;
     }
-
-    // 2. Check Adjacency
-    const lastCellRaw = currentPath[currentPath.length - 1];
-    const dx = Math.abs(lastCellRaw.r - r);
-    const dy = Math.abs(lastCellRaw.c - c);
-
-    // Must be orthogonally adjacent
-    if (!((dx === 1 && dy === 0) || (dx === 0 && dy === 1))) {
-        // Not adjacent, reset and start new path
-        resetCurrentPath(true);
+    if (currentPath.some(p => p.r === r && p.c === c)) return;
+    const last = currentPath[currentPath.length - 1];
+    if (Math.abs(last.r - r) + Math.abs(last.c - c) !== 1) {
+        resetCurrentPath();
         startNewPath(r, c, cellData, cellEl);
         return;
     }
-
-    // 3. Check if cell is already in the path
-    if (currentPath.some(p => p.r === r && p.c === c)) {
+    const prefix = pathText() + cellData.char;
+    if (!matchingWords(prefix).length) {
+        markPathError(cellEl);
+        resetCurrentPath();
         return;
     }
-
-    // 4. Validate next character of the word
-    const targetWordStr = currentPath[0].data.originWord;
-    const targetWordId = currentPath[0].data.wordId;
-    const expectedChar = targetWordStr[currentPath.length];
-
-    if (cellData.char === expectedChar && cellData.wordId === targetWordId) {
-        currentPath.push({ r, c, data: cellData, el: cellEl });
-        cellEl.classList.add('selected');
-        DOM.currentWordDisplay.textContent = currentPath.map(p => p.data.char).join('');
-
-        // Check if word completed
-        if (currentPath.length === targetWordStr.length) {
-            completeWord();
-        }
-    } else {
-        // Error!
-        cellEl.classList.add('error');
-        setTimeout(() => cellEl.classList.remove('error'), 300);
-        resetCurrentPath(true);
-    }
+    // 按可见文字判定，不再要求玩家猜格子的隐藏编号；点亮的字也可借用。
+    currentPath.push({ r, c, data: cellData, el: cellEl });
+    cellEl.classList.add('selected');
+    DOM.currentWordDisplay.textContent = prefix;
+    completeWord();
 }
 
 function startNewPath(r, c, cellData, cellEl) {
+    if (!matchingWords(cellData.char).length) {
+        markPathError(cellEl);
+        return;
+    }
     currentPath = [{ r, c, data: cellData, el: cellEl }];
     cellEl.classList.add('selected');
     DOM.currentWordDisplay.textContent = cellData.char;
-
-    // If it's a 1-character word
-    if (cellData.originWord.length === 1) {
-        completeWord();
-    }
+    completeWord();
 }
 
-function resetCurrentPath(isError = false) {
+function resetCurrentPath() {
     currentPath.forEach(p => {
         p.el.classList.remove('selected');
     });
@@ -424,43 +433,54 @@ function resetCurrentPath(isError = false) {
 }
 
 function completeWord() {
+    const word = pathText();
+    if (!word || remainingCopies(word) <= 0) return;
+    const key = wordPathKey(word, currentPath);
+    if (usedWordPaths.has(key)) {
+        if (!matchingWords(word).some(candidate => candidate.length > word.length)) resetCurrentPath();
+        return;
+    }
+    usedWordPaths.add(key);
+    foundWordCounts.set(word, (foundWordCounts.get(word) || 0) + 1);
     currentPath.forEach(p => {
         p.el.classList.remove('selected');
         p.el.classList.add('done');
         p.data.done = true;
     });
-    currentPath = [];
     foundWordsCount++;
     DOM.remainingWords.textContent = totalWordsToFind - foundWordsCount;
 
+    // 短词自动计分后仍可接成长词，无需给原界面增加确认按钮。
+    if (!matchingWords(word).some(candidate => candidate.length > word.length)) resetCurrentPath();
+
     if (foundWordsCount >= totalWordsToFind) {
+        gamePhase = 'won';
+        DOM.btnHint.disabled = true;
         stopTimer();
-        setTimeout(() => {
-            DOM.winModal.classList.remove('hidden');
+        const generation = gameGeneration;
+        pendingRoundTimeout = setTimeout(() => {
+            if (generation === gameGeneration && gamePhase === 'won') DOM.winModal.classList.remove('hidden');
         }, 500);
     }
 }
 
 function showHint() {
-    // Find a word that is not done yet
-    if (currentPath.length > 0) {
-        resetCurrentPath();
-    }
-
-    // naive scan for not done
-    for (let r = 0; r < boardSize; r++) {
-        for (let c = 0; c < boardSize; c++) {
-            if (grid[r][c] && !grid[r][c].done) {
-                const el = document.getElementById(`cell-${r}-${c}`);
-                el.style.transform = 'scale(1.1)';
-                el.style.backgroundColor = '#FFDE82';
-                setTimeout(() => {
-                    el.style.transform = '';
-                    el.style.backgroundColor = '';
-                }, 500);
-                return; // just hint the first one we find
-            }
-        }
+    if (gamePhase !== 'playing') return;
+    resetCurrentPath();
+    for (let i = 0; i < targetWords.length; i++) {
+        const word = targetWords[i];
+        const path = targetPaths[i];
+        if (remainingCopies(word) <= 0 || !path || !path.length || usedWordPaths.has(wordPathKey(word, path))) continue;
+        const { r, c } = path[0];
+        const el = document.getElementById(`cell-${r}-${c}`);
+        DOM.currentWordDisplay.textContent = `试试连接「${word}」`;
+        el.style.transform = 'scale(1.1)';
+        el.style.backgroundColor = '#FFDE82';
+        setTimeout(() => {
+            el.style.transform = '';
+            el.style.backgroundColor = '';
+        }, 500);
+        return;
     }
 }
 

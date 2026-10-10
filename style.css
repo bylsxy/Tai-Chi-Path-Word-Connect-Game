@@ -98,6 +98,30 @@ body {
     color: #3b82f6; /* Blue for timer */
 }
 
+#timer {
+    display: inline-block;
+}
+
+/* 最后十秒用颜色和轻微缩放、抖动反复提醒，不影响周围文字布局。 */
+#timer.timer-warning {
+    color: #dc2626;
+    animation: timer-warning 0.85s ease-in-out infinite;
+}
+
+@keyframes timer-warning {
+    0%, 100% { color: #dc2626; transform: scale(1); }
+    20% { color: #f87171; transform: translateX(-2px) rotate(-3deg) scale(1.12); }
+    40% { color: #dc2626; transform: translateX(2px) rotate(3deg) scale(1.25); }
+    60% { color: #f87171; transform: translateX(-1px) rotate(-2deg) scale(1.18); }
+    80% { color: #dc2626; transform: scale(1.08); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    #timer.timer-warning {
+        animation: none;
+    }
+}
+
 /* Game Area */
 .game-container {
     flex: 1;

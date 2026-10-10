@@ -116,6 +116,15 @@
         </div>
     </div>
 
+    <!-- 时间到后保留当前棋盘，玩家主动重试才开始新局。 -->
+    <div id="lose-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="lose-modal-title">
+        <div class="modal-content text-center">
+            <h2 id="lose-modal-title">⏰ 时间到了</h2>
+            <p>还剩 <span id="lose-remaining">0</span> 个词语，下次再挑战！</p>
+            <button id="btn-try-again" class="primary-btn mt-4">再试一次</button>
+        </div>
+    </div>
+
     <script src="script.js"></script>
 </body>
 </html>

@@ -1,4 +1,4 @@
-const CACHE_NAME = 'taichi-game-v2'; // 升级缓存版本，强制更新
+const CACHE_NAME = 'taichi-game-v2-logic-1'; // 更新资源缓存，避免仍加载修复前的脚本和样式。
 const ASSETS = [
   './',
   './index.html',
