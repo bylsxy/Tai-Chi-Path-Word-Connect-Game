@@ -17,6 +17,15 @@ let totalWordsToFind = 0;
 let gameGeneration = 0;
 let gamePhase = 'loading';
 let pendingRoundTimeout = null;
+let hintCredits = 3;
+let hintRefillAt = 0;
+let hintedWord = null;
+let hintedProgress = -1;
+let hintRetryToast = null;
+let hintRetryInterval = null;
+let hintHighlightTimeout = null;
+let hintHighlightedCell = null;
+let hintHighlightVersion = 0;
 
 let timerInterval = null;
 let timerSeconds = 0;
@@ -192,6 +201,8 @@ function stopTimer() {
         timerInterval = null;
     }
     DOM.timer.classList.remove('timer-warning');
+    clearHintRetry();
+    clearHintHighlight();
 }
 
 function startTimer() {
@@ -248,6 +259,10 @@ function loadGridGenerator() {
 function startGame() {
     const generation = ++gameGeneration;
     stopTimer();
+    hintCredits = 3;
+    hintRefillAt = 0;
+    hintedWord = null;
+    hintedProgress = -1;
     clearTimeout(pendingRoundTimeout);
     pendingRoundTimeout = null;
     if (gridWorker) gridWorker.terminate();
@@ -464,21 +479,89 @@ function completeWord() {
     }
 }
 
+function refreshHintCredits() {
+    const now = Date.now();
+    if (!hintRefillAt || now < hintRefillAt) return;
+    // 用真实经过的时间补充，后台暂停或连点都不会延长等待。
+    const recovered = Math.floor((now - hintRefillAt) / 5000) + 1;
+    hintCredits = Math.min(3, hintCredits + recovered);
+    hintRefillAt = hintCredits === 3 ? 0 : hintRefillAt + recovered * 5000;
+}
+
+function clearHintRetry() {
+    if (hintRetryInterval !== null) clearInterval(hintRetryInterval);
+    hintRetryInterval = null;
+    if (hintRetryToast) hintRetryToast.remove();
+    hintRetryToast = null;
+}
+
+function clearHintHighlight() {
+    hintHighlightVersion++;
+    if (hintHighlightTimeout !== null) clearTimeout(hintHighlightTimeout);
+    hintHighlightTimeout = null;
+    if (hintHighlightedCell) {
+        hintHighlightedCell.style.transform = '';
+        hintHighlightedCell.style.backgroundColor = '';
+    }
+    hintHighlightedCell = null;
+}
+
+function showHintRetry() {
+    const generation = gameGeneration;
+    if (!hintRetryToast) {
+        hintRetryToast = document.createElement('div');
+        hintRetryToast.className = 'toast';
+        DOM.toastContainer.appendChild(hintRetryToast);
+        const toast = hintRetryToast;
+        requestAnimationFrame(() => {
+            if (generation === gameGeneration && toast === hintRetryToast) toast.classList.add('show');
+        });
+    }
+    function update() {
+        if (generation !== gameGeneration) return;
+        refreshHintCredits();
+        if (gamePhase !== 'playing' || hintCredits > 0) {
+            clearHintRetry();
+            return;
+        }
+        const seconds = Math.ceil((hintRefillAt - Date.now()) / 1000);
+        hintRetryToast.textContent = `提示次数过多，${seconds}s后重试`;
+    }
+    update();
+    // 复用同一个倒计时提示，连点不会叠加窗口或重置五秒等待。
+    if (hintRetryToast && hintRetryInterval === null) hintRetryInterval = setInterval(update, 200);
+}
+
 function showHint() {
     if (gamePhase !== 'playing') return;
-    resetCurrentPath();
     for (let i = 0; i < targetWords.length; i++) {
         const word = targetWords[i];
         const path = targetPaths[i];
         if (remainingCopies(word) <= 0 || !path || !path.length || usedWordPaths.has(wordPathKey(word, path))) continue;
+        refreshHintCredits();
+        if (hintCredits <= 0) {
+            showHintRetry();
+            return;
+        }
+        // 同一词没有完成进展时只计一次，避免连续点击浪费机会。
+        if (hintedWord !== word || hintedProgress !== foundWordsCount) {
+            hintCredits--;
+            hintedWord = word;
+            hintedProgress = foundWordsCount;
+            if (!hintCredits && !hintRefillAt) hintRefillAt = Date.now() + 5000;
+        }
+        clearHintRetry();
+        resetCurrentPath();
         const { r, c } = path[0];
         const el = document.getElementById(`cell-${r}-${c}`);
-        DOM.currentWordDisplay.textContent = `试试连接「${word}」`;
+        clearHintHighlight();
+        hintHighlightedCell = el;
         el.style.transform = 'scale(1.1)';
         el.style.backgroundColor = '#FFDE82';
-        setTimeout(() => {
-            el.style.transform = '';
-            el.style.backgroundColor = '';
+        const generation = gameGeneration;
+        const version = hintHighlightVersion;
+        hintHighlightTimeout = setTimeout(() => {
+            if (generation === gameGeneration && version === hintHighlightVersion && hintHighlightedCell === el) clearHintHighlight();
         }, 500);
         return;
     }

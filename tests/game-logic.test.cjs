@@ -114,6 +114,12 @@ function createGame(options = {}) {
         createElement: tag => new Element(tag)
     };
     const tasks = new Map();
+    // 时间推进与定时器调用分离，验证后台挂起后按真实 deadline 恢复额度。
+    let now = 100000;
+    class FakeDate extends Date {
+        constructor(...args) { super(...(args.length ? args : [now])); }
+        static now() { return now; }
+    }
     let nextTaskId = 1;
     const schedule = (callback, delay, kind) => {
         const id = nextTaskId++;
@@ -137,7 +143,7 @@ function createGame(options = {}) {
     const storage = new Map();
     if (options.words) storage.set('taichi_words', options.words.join('\n'));
     const context = vm.createContext({
-        document, Worker, navigator: {}, window: { addEventListener() {} }, console,
+        document, Worker, Date: FakeDate, navigator: {}, window: { addEventListener() {} }, console,
         localStorage: {
             getItem: key => storage.get(key) ?? null,
             setItem: (key, value) => storage.set(key, String(value)),
@@ -177,8 +183,239 @@ function createGame(options = {}) {
     const lastTask = (delay, kind = 'timeout') => [...tasks.values()]
         .filter(task => task.delay === delay && task.kind === kind && !task.canceled).at(-1);
     return { context, document, evaluate, load, click, count, current, roots, remaining,
-        workers, workerStats, tasks, lastTask };
+        workers, workerStats, tasks, lastTask,
+        now: () => now, advance: milliseconds => { now += milliseconds; } };
 }
+
+function hintState(game) {
+    return JSON.parse(game.evaluate('JSON.stringify([hintCredits, hintRefillAt, hintedWord, hintedProgress])'));
+}
+
+function loadHintRound(game) {
+    game.load(['甲乙', '丙丁', '戊己', '庚辛', '壬癸'],
+        ['甲乙□□□', '丙丁□□□', '戊己□□□', '庚辛□□□', '壬癸□□□']);
+}
+
+function exhaustHints(game) {
+    loadHintRound(game);
+    game.evaluate('showHint()');
+    game.click([0, 0], [0, 1]);
+    game.evaluate('showHint()');
+    game.click([1, 0], [1, 1]);
+    game.evaluate('showHint()');
+    assert.equal(game.evaluate('hintCredits'), 0);
+}
+
+test('提示：新局有三次隐藏额度，第三次实际消费才启动五秒冷却', () => {
+    const game = createGame();
+    loadHintRound(game);
+    assert.deepEqual(hintState(game), [3, 0, null, -1]);
+    for (let row = 0; row < 3; row++) {
+        game.evaluate('showHint()');
+        assert.equal(game.evaluate('hintCredits'), 2 - row);
+        assert.equal(game.evaluate('hintedProgress'), row);
+        assert.equal(game.evaluate('hintRefillAt'), row === 2 ? game.now() + 5000 : 0);
+        assert.ok(game.document.getElementById(`cell-${row}-0`).style.backgroundColor);
+        assert.equal(game.roots.get('toast-container').children.length, 0);
+        assert.doesNotMatch(game.roots.get('current-word-display').textContent, /试试连接|甲乙|丙丁|戊己|次数|剩余/);
+        if (row < 2) game.click([row, 0], [row, 1]);
+    }
+});
+
+test('提示：同词连点、点错和局部选择不重复扣费，仍可重新闪烁起点', () => {
+    const game = createGame();
+    loadHintRound(game);
+    game.evaluate('showHint()');
+    const firstHighlight = game.lastTask(500);
+    const expected = hintState(game);
+    firstHighlight.callback();
+    assert.equal(game.document.getElementById('cell-0-0').style.backgroundColor, '');
+    for (const coordinates of [[], [[4, 4]], [[0, 0]], [[0, 0], [1, 0]]]) {
+        game.click(...coordinates);
+        game.evaluate('showHint()');
+        assert.equal(game.count(), 0);
+        assert.deepEqual(hintState(game), expected);
+        assert.ok(game.document.getElementById('cell-0-0').style.backgroundColor);
+    }
+    assert.notEqual(game.lastTask(500), firstHighlight, '重新提示应安排新的闪烁结束回调');
+});
+
+test('提示：同词重复闪烁及重开后，已排队旧高亮回调不能清除最新高亮', () => {
+    const game = createGame();
+    loadHintRound(game);
+    game.evaluate('showHint()');
+    const oldHighlight = game.lastTask(500);
+    const oldCell = game.document.getElementById('cell-0-0');
+    game.advance(250);
+    game.evaluate('showHint()');
+    const latestHighlight = game.lastTask(500);
+    assert.notEqual(latestHighlight, oldHighlight);
+    assert.equal(oldHighlight.canceled, true);
+    // 即便旧回调已经进入任务队列，仍不得清除同一个元素的新一轮闪烁。
+    oldHighlight.callback();
+    assert.equal(oldCell.style.backgroundColor, '#FFDE82');
+    assert.equal(oldCell.style.transform, 'scale(1.1)');
+    assert.equal(latestHighlight.canceled, false);
+
+    loadHintRound(game);
+    assert.equal(latestHighlight.canceled, true, '重开应取消上一局高亮定时器');
+    game.evaluate('showHint()');
+    const newCell = game.document.getElementById('cell-0-0');
+    const newHighlight = game.lastTask(500);
+    assert.notEqual(newCell, oldCell);
+    oldHighlight.callback();
+    latestHighlight.callback();
+    assert.equal(newCell.style.backgroundColor, '#FFDE82');
+    assert.equal(newCell.style.transform, 'scale(1.1)');
+    assert.equal(newHighlight.canceled, false);
+    assert.equal(oldCell.style.backgroundColor, '');
+    assert.equal(oldCell.style.transform, '');
+    newHighlight.callback();
+    assert.equal(newCell.style.backgroundColor, '', '最新回调仍应正常结束闪烁');
+    assert.equal(newCell.style.transform, '');
+});
+
+test('提示：零额度同词连点只显示单一冷却 toast，不延长 deadline 或泄露答案', () => {
+    const game = createGame();
+    exhaustHints(game);
+    const deadline = game.evaluate('hintRefillAt');
+    game.evaluate('showHint()');
+    const toast = game.roots.get('toast-container').children[0];
+    const interval = game.lastTask(200, 'interval');
+    assert.equal(toast.textContent, '提示次数过多，5s后重试');
+    for (let i = 0; i < 8; i++) {
+        game.advance(100);
+        game.evaluate('showHint()');
+        assert.equal(game.evaluate('hintRefillAt'), deadline);
+        assert.equal(game.evaluate('hintCredits'), 0);
+        assert.equal(game.roots.get('toast-container').children.length, 1);
+        assert.equal(game.roots.get('toast-container').children[0], toast);
+        assert.equal(game.lastTask(200, 'interval'), interval);
+    }
+    assert.doesNotMatch(game.roots.get('current-word-display').textContent, /试试连接|戊己/);
+    assert.doesNotMatch(toast.textContent, /试试连接|戊己/);
+});
+
+test('提示：冷却文案按绝对时间从五秒到一秒，重复 interval 不加速恢复', () => {
+    const game = createGame();
+    exhaustHints(game);
+    game.evaluate('showHint()');
+    const toast = game.roots.get('toast-container').children[0];
+    const interval = game.lastTask(200, 'interval');
+    for (let second = 5; second >= 1; second--) {
+        interval.callback();
+        assert.equal(toast.textContent, `提示次数过多，${second}s后重试`);
+        for (let tick = 0; tick < 10; tick++) interval.callback();
+        assert.equal(game.evaluate('hintCredits'), 0);
+        if (second > 1) game.advance(1000);
+    }
+    game.advance(999);
+    interval.callback();
+    assert.equal(toast.textContent, '提示次数过多，1s后重试', '不足一秒应向上取整');
+    assert.equal(game.evaluate('hintCredits'), 0);
+    game.advance(1);
+    interval.callback();
+    assert.equal(game.evaluate('hintCredits'), 1);
+    assert.equal(game.evaluate('hintRefillAt'), game.now() + 5000);
+    assert.equal(game.roots.get('toast-container').children.length, 0);
+    assert.equal(interval.canceled, true);
+});
+
+test('提示：无需 interval tick，五秒恢复一次，消费恢复额度不推迟下一 deadline', () => {
+    const game = createGame();
+    exhaustHints(game);
+    const firstDeadline = game.evaluate('hintRefillAt');
+    game.advance(4999);
+    game.evaluate('showHint()');
+    assert.equal(game.evaluate('hintCredits'), 0);
+    game.advance(1);
+    game.evaluate('showHint()');
+    assert.equal(game.evaluate('hintCredits'), 1, '同词无进展重闪不消耗恢复额度');
+    assert.equal(game.evaluate('hintRefillAt'), firstDeadline + 5000);
+    game.click([2, 0], [2, 1]);
+    game.evaluate('showHint()');
+    assert.equal(game.evaluate('hintCredits'), 0, '完成目标后下一提示应实际消费');
+    assert.equal(game.evaluate('hintRefillAt'), firstDeadline + 5000);
+    game.advance(5000);
+    game.evaluate('showHint()');
+    assert.equal(game.evaluate('hintCredits'), 1);
+    assert.equal(game.evaluate('hintRefillAt'), firstDeadline + 10000);
+});
+
+test('提示：后台跨多个 deadline 一次补齐额度，最多三次且停止冷却', () => {
+    for (const [elapsed, credits, nextOffset] of [[10000, 2, 15000], [15000, 3, 0], [60000, 3, 0]]) {
+        const game = createGame();
+        exhaustHints(game);
+        const consumedAt = game.now();
+        game.advance(elapsed);
+        game.evaluate('showHint()');
+        assert.equal(game.evaluate('hintCredits'), credits);
+        assert.equal(game.evaluate('hintRefillAt'), nextOffset ? consumedAt + nextOffset : 0);
+        assert.equal(game.roots.get('toast-container').children.length, 0);
+    }
+});
+
+test('提示：重复目标文字完成一份后属于新进展，下一份提示再次消费', () => {
+    const game = createGame();
+    game.load(['甲乙甲', '甲乙甲', '丙丁丙'], ['甲乙甲', '丙丁丙', '甲乙甲']);
+    game.evaluate('showHint()');
+    game.evaluate('showHint()');
+    assert.deepEqual(hintState(game), [2, 0, '甲乙甲', 0]);
+    game.click([0, 0], [0, 1], [0, 2]);
+    game.evaluate('showHint()');
+    assert.deepEqual(hintState(game), [1, 0, '甲乙甲', 1]);
+    assert.ok(game.document.getElementById('cell-2-0').style.backgroundColor);
+    game.evaluate('showHint()');
+    assert.equal(game.evaluate('hintCredits'), 1);
+});
+
+test('提示：新局清理冷却并重置状态，旧 toast 回调不影响新局冷却', () => {
+    const game = createGame();
+    exhaustHints(game);
+    const priorIds = new Set(game.tasks.keys());
+    game.evaluate('showHint()');
+    const oldTasks = [...game.tasks].filter(([id]) => !priorIds.has(id)).map(([, task]) => task);
+    const oldInterval = game.lastTask(200, 'interval');
+    game.evaluate('startGame()');
+    assert.deepEqual(hintState(game), [3, 0, null, -1]);
+    assert.equal(game.roots.get('toast-container').children.length, 0);
+    assert.equal(oldInterval.canceled, true);
+    exhaustHints(game);
+    game.evaluate('showHint()');
+    const newToast = game.roots.get('toast-container').children[0];
+    const expected = hintState(game);
+    oldTasks.forEach(task => task.callback());
+    assert.deepEqual(hintState(game), expected);
+    assert.equal(game.roots.get('toast-container').children.length, 1);
+    assert.equal(game.roots.get('toast-container').children[0], newToast);
+    assert.equal(newToast.textContent, '提示次数过多，5s后重试');
+    assert.equal(game.lastTask(200, 'interval').canceled, false);
+});
+
+test('提示：失败或胜利清理冷却 toast 与 interval，旧回调不能重新显示', () => {
+    for (const outcome of ['expired', 'won']) {
+        const game = createGame();
+        exhaustHints(game);
+        const timer = game.lastTask(1000, 'interval');
+        game.evaluate('showHint()');
+        const retry = game.lastTask(200, 'interval');
+        if (outcome === 'expired') {
+            game.evaluate('timerSeconds = 1');
+            timer.callback();
+        } else {
+            for (let row = 2; row < 5; row++) game.click([row, 0], [row, 1]);
+        }
+        assert.equal(game.evaluate('gamePhase'), outcome);
+        assert.equal(retry.canceled, true);
+        assert.equal(game.roots.get('toast-container').children.length, 0);
+        const expected = hintState(game);
+        retry.callback();
+        game.evaluate('showHint()');
+        assert.deepEqual(hintState(game), expected);
+        assert.equal(game.roots.get('toast-container').children.length, 0);
+        assert.ok(!game.lastTask(200, 'interval'));
+    }
+});
 
 test('相邻正确文字可以跨隐藏 wordId 与 originWord 完成', () => {
     const game = createGame();

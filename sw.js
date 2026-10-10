@@ -1,4 +1,4 @@
-const CACHE_NAME = 'taichi-game-v2-logic-1'; // 更新资源缓存，避免仍加载修复前的脚本和样式。
+const CACHE_NAME = 'taichi-game-v2-logic-2'; // 更新资源缓存，避免仍加载修复前的脚本和样式。
 const ASSETS = [
   './',
   './index.html',
